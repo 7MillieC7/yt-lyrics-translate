@@ -8,6 +8,8 @@ Strategy:
   3. If the caption language doesn't match the declared audio language, warn and
      fall back to Whisper so you get the actual sung lyrics, not a translation.
   4. If no captions exist at all, fall back to Whisper.
+  5. If the lyrics are not in English, automatically translate them to English
+     and save both files inside an output folder named after the song.
 
 Usage:
   python translyrics.py <youtube_url>
@@ -134,10 +136,10 @@ def extract_captions(url: str, lang: str = "en") -> tuple[str | None, str | None
         return transcript, cap_lang
 
 
-def transcribe_with_whisper(url: str, title: str, model_size: str = "base") -> str:
+def transcribe_with_whisper(url: str, title: str, model_size: str = "base") -> tuple[str, str]:
     """
     Download audio via yt-dlp and transcribe with OpenAI Whisper.
-    Returns transcript_text.
+    Returns (transcript_text, detected_language_code).
     """
     try:
         import whisper
@@ -162,25 +164,88 @@ def transcribe_with_whisper(url: str, title: str, model_size: str = "base") -> s
         print(f"[INFO] Transcribing with Whisper model '{model_size}' (this may take a moment)...")
         model = whisper.load_model(model_size)
         result = model.transcribe(audio_path, fp16=False)
+
+        detected_lang = result.get("language", "unknown")
         segments = result.get("segments", [])
         if segments:
-            return "\n\n".join(seg["text"].strip() for seg in segments if seg["text"].strip())
-        return result["text"].strip()
+            transcript = "\n\n".join(seg["text"].strip() for seg in segments if seg["text"].strip())
+        else:
+            transcript = result["text"].strip()
+
+        return transcript, detected_lang
 
 
-def save_output(title: str, transcript: str, source: str) -> str:
-    """Save transcript to a .txt file. Returns the saved path."""
+def translate_to_english(text: str) -> str | None:
+    """
+    Translate text to English using Google Translate via deep-translator.
+    Splits into chunks to stay within API limits.
+    Returns None if deep-translator is not installed.
+    """
+    try:
+        from deep_translator import GoogleTranslator
+    except ImportError:
+        print("[WARN] deep-translator is not installed — skipping auto-translation.")
+        print("       Run: python -m pip install deep-translator")
+        return None
+
+    MAX_CHUNK = 4500
+    paragraphs = text.split("\n")
+    chunks = []
+    current_chunk = []
+    current_len = 0
+
+    for para in paragraphs:
+        if current_len + len(para) + 1 > MAX_CHUNK:
+            chunks.append("\n".join(current_chunk))
+            current_chunk = [para]
+            current_len = len(para)
+        else:
+            current_chunk.append(para)
+            current_len += len(para) + 1
+
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    translator = GoogleTranslator(source="auto", target="english")
+    translated_chunks = []
+    for i, chunk in enumerate(chunks):
+        if len(chunks) > 1:
+            print(f"[INFO] Translating chunk {i + 1}/{len(chunks)}...")
+        translated_chunks.append(translator.translate(chunk))
+
+    return "\n".join(translated_chunks)
+
+
+def save_output(title: str, transcript: str, source: str, output_dir: str) -> str:
+    """Save transcript to a .txt file inside output_dir. Returns the saved path."""
     safe_title = sanitize_filename(title)[:80]
-    filename = f"{safe_title}.txt"
+    os.makedirs(output_dir, exist_ok=True)
+    filepath = os.path.join(output_dir, f"{safe_title}.txt")
 
-    with open(filename, "w", encoding="utf-8") as f:
+    with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"Title: {title}\n")
         f.write(f"Source: {source}\n")
         f.write("=" * 60 + "\n\n")
         f.write(transcript)
         f.write("\n")
 
-    return filename
+    return filepath
+
+
+def save_translation(title: str, source: str, translated: str, output_dir: str) -> str:
+    """Save English translation to a .txt file inside output_dir. Returns the saved path."""
+    safe_title = sanitize_filename(title)[:80]
+    filepath = os.path.join(output_dir, f"{safe_title} [English].txt")
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"Title: {title}\n")
+        f.write(f"Source: {source}\n")
+        f.write("Translation: English (via Google Translate)\n")
+        f.write("=" * 60 + "\n\n")
+        f.write(translated)
+        f.write("\n")
+
+    return filepath
 
 
 # ---------------------------------------------------------------------------
@@ -215,8 +280,10 @@ def main():
     title = metadata.get("title") or "unknown"
     audio_lang = metadata.get("language")  # declared audio language, e.g. "la", "de", or None
 
+    output_dir = sanitize_filename(title)[:80]
+
     if args.whisper:
-        transcript = transcribe_with_whisper(args.url, title, args.model)
+        transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model)
         source = f"Whisper transcription (model: {args.model})"
     else:
         sub_lang = choose_subtitle_lang(metadata)
@@ -243,28 +310,41 @@ def main():
                               f"declared audio language '{audio_lang}'.")
                         print("[WARN] Captions appear to be a translation, not the original lyrics.")
                         print("[INFO] Falling back to Whisper to transcribe the actual lyrics...")
-                        transcript = transcribe_with_whisper(args.url, title, args.model)
+                        transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model)
                         source = f"Whisper transcription (model: {args.model})"
                     else:
+                        transcript_lang = cap_lang
                         source = "YouTube captions (yt-dlp)"
                 else:
                     print("[WARN] Video has no declared audio language — cannot verify captions.")
                     print("[INFO] Falling back to Whisper to ensure original lyrics are captured...")
-                    transcript = transcribe_with_whisper(args.url, title, args.model)
+                    transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model)
                     source = f"Whisper transcription (model: {args.model})"
             else:
+                transcript_lang = cap_lang or audio_lang
                 source = "YouTube captions (yt-dlp)"
         else:
             print("[INFO] No captions available. Falling back to Whisper transcription.")
-            transcript = transcribe_with_whisper(args.url, title, args.model)
+            transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model)
             source = f"Whisper transcription (model: {args.model})"
 
-    out_path = save_output(title, transcript, source)
-    print(f"\n[DONE] Saved to: {out_path}")
+    # --- Save original lyrics ---
+    orig_path = save_output(title, transcript, source, output_dir)
+    print(f"\n[DONE] Saved to: {orig_path}")
+
+    # --- Auto-translate to English if lyrics are not in English ---
+    lang_base = (transcript_lang or "").split("-")[0].lower()
+    if lang_base and lang_base != "en":
+        print(f"\n[INFO] Lyrics are in '{transcript_lang}' — translating to English...")
+        translated = translate_to_english(transcript)
+        if translated:
+            trans_path = save_translation(title, source, translated, output_dir)
+            print(f"[DONE] Translation saved to: {trans_path}")
+
     print("\n" + "=" * 60)
     print(transcript[:2000])
     if len(transcript) > 2000:
-        print(f"\n... [truncated — full text in {out_path}]")
+        print(f"\n... [truncated — full text in {orig_path}]")
 
 
 if __name__ == "__main__":

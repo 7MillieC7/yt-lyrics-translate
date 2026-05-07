@@ -6,9 +6,9 @@ Extract lyrics or transcripts from any YouTube video and optionally translate th
 
 ## What it does
 
-**`translyrics.py`** — give it a YouTube link, get a `.txt` file with the lyrics or transcript.
+**`translyrics.py`** — give it a YouTube link, get a folder named after the song containing the lyrics. If the song is not in English, an English translation is created automatically alongside the original.
 
-**`translation.py`** — give it that `.txt` file and a language name, get a translated `.txt` file.
+**`translation.py`** — give it the lyrics `.txt` file and a language name, get a translated version in any language you choose.
 
 ---
 
@@ -87,12 +87,15 @@ python translyrics.py "PASTE_YOUR_YOUTUBE_URL_HERE"
 python translyrics.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 ```
 
-When it finishes, a `.txt` file named after the video will appear in the same folder.
+When it finishes, a **folder named after the video** will appear in the same directory. Inside it:
+- `Song Title.txt` — the original lyrics
+- `Song Title [English].txt` — an English translation, created automatically if the song is not in English
 
 **How it works behind the scenes:**
 - It first tries to grab the video's subtitles/captions (fast, a few seconds)
-- It checks that the captions are actually in the same language as the song — if they're a translation, it ignores them
+- It checks that the captions are in the same language as the song — if they're a translation, it ignores them and transcribes the audio instead
 - If captions aren't available or can't be verified, it downloads the audio and transcribes it using AI (this takes longer — a few minutes depending on the video length)
+- If the lyrics are not in English, it automatically translates them and saves both files
 
 **Optional flags you can add at the end:**
 
@@ -109,18 +112,20 @@ python translyrics.py "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --whisper
 
 ---
 
-### Step 2 — Translate the lyrics (optional)
+### Step 2 — Translate the lyrics to another language (optional)
+
+English translation is automatic — if the song is not in English, `translyrics.py` already creates it. Use this step if you want the lyrics in a **different** language.
 
 ```
-python translation.py "YOUR_FILE_NAME.txt" LANGUAGE
+python translation.py "FOLDER\YOUR_FILE_NAME.txt" LANGUAGE
 ```
 
 **Example:**
 ```
-python translation.py "Never Gonna Give You Up.txt" french
+python translation.py "Never Gonna Give You Up\Never Gonna Give You Up.txt" french
 ```
 
-This creates a new file called `Never Gonna Give You Up [French].txt` in the same folder.
+This creates a new file called `Never Gonna Give You Up [French].txt` inside the song's folder.
 
 **Supported languages** (and many more — just type the name in English):
 
