@@ -136,10 +136,14 @@ def extract_captions(url: str, lang: str = "en") -> tuple[str | None, str | None
         return transcript, cap_lang
 
 
-def transcribe_with_whisper(url: str, title: str, model_size: str = "base") -> tuple[str, str]:
+def transcribe_with_whisper(
+    url: str, title: str, model_size: str = "base", audio_dir: str | None = None
+) -> tuple[str, str]:
     """
     Download audio via yt-dlp and transcribe with OpenAI Whisper.
     Returns (transcript_text, detected_language_code).
+    If audio_dir is given, the MP3 is kept there as <title>.mp3; otherwise it is
+    downloaded into a temp directory and deleted after transcription.
     """
     try:
         import whisper
@@ -148,9 +152,16 @@ def transcribe_with_whisper(url: str, title: str, model_size: str = "base") -> t
         print("        Run: python -m pip install openai-whisper")
         sys.exit(1)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        audio_path = os.path.join(tmpdir, "audio.mp3")
+    if audio_dir:
+        os.makedirs(audio_dir, exist_ok=True)
+        safe_title = sanitize_filename(title)[:80]
+        audio_path = os.path.join(audio_dir, f"{safe_title}.mp3")
+        tmp_ctx = None
+    else:
+        tmp_ctx = tempfile.TemporaryDirectory()
+        audio_path = os.path.join(tmp_ctx.name, "audio.mp3")
 
+    try:
         print(f"[INFO] Downloading audio for: {title}")
         cmd = [
             sys.executable, "-m", "yt_dlp",
@@ -160,6 +171,9 @@ def transcribe_with_whisper(url: str, title: str, model_size: str = "base") -> t
             url,
         ]
         subprocess.run(cmd, check=True)
+
+        if audio_dir:
+            print(f"[INFO] MP3 saved to: {audio_path}")
 
         print(f"[INFO] Transcribing with Whisper model '{model_size}' (this may take a moment)...")
         model = whisper.load_model(model_size)
@@ -173,6 +187,9 @@ def transcribe_with_whisper(url: str, title: str, model_size: str = "base") -> t
             transcript = result["text"].strip()
 
         return transcript, detected_lang
+    finally:
+        if tmp_ctx:
+            tmp_ctx.cleanup()
 
 
 def translate_to_english(text: str) -> str | None:
@@ -283,7 +300,7 @@ def main():
     output_dir = sanitize_filename(title)[:80]
 
     if args.whisper:
-        transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model)
+        transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model, audio_dir=output_dir)
         source = f"Whisper transcription (model: {args.model})"
     else:
         sub_lang = choose_subtitle_lang(metadata)
@@ -310,7 +327,7 @@ def main():
                               f"declared audio language '{audio_lang}'.")
                         print("[WARN] Captions appear to be a translation, not the original lyrics.")
                         print("[INFO] Falling back to Whisper to transcribe the actual lyrics...")
-                        transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model)
+                        transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model, audio_dir=output_dir)
                         source = f"Whisper transcription (model: {args.model})"
                     else:
                         transcript_lang = cap_lang
@@ -318,14 +335,14 @@ def main():
                 else:
                     print("[WARN] Video has no declared audio language — cannot verify captions.")
                     print("[INFO] Falling back to Whisper to ensure original lyrics are captured...")
-                    transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model)
+                    transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model, audio_dir=output_dir)
                     source = f"Whisper transcription (model: {args.model})"
             else:
                 transcript_lang = cap_lang or audio_lang
                 source = "YouTube captions (yt-dlp)"
         else:
             print("[INFO] No captions available. Falling back to Whisper transcription.")
-            transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model)
+            transcript, transcript_lang = transcribe_with_whisper(args.url, title, args.model, audio_dir=output_dir)
             source = f"Whisper transcription (model: {args.model})"
 
     # --- Save original lyrics ---

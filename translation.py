@@ -14,8 +14,6 @@ Examples:
 Note: Ukrainian output includes both Cyrillic and transliteration in the same file.
 """
 
-__author__ = "Millie"
-
 import argparse
 import os
 import sys
